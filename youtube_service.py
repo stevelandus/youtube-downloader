@@ -21,7 +21,6 @@ DOWNLOADS_DIR = BASE_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 # In-memory storage for active/completed download jobs
-# Structure: { job_id: { 'status': 'queued'|'downloading'|'converting'|'finished'|'error', 'progress': 0, 'speed': '', 'eta': '', 'filename': '', 'file_path': '', 'title': '', 'error_msg': '' } }
 jobs = {}
 
 def clean_old_files(max_age_seconds=3600):
@@ -43,34 +42,65 @@ def sanitize_filename(name):
     name = re.sub(r'[\\/*?:"<>|]', '', name)
     return name.strip() or "video"
 
-def parse_url_type(url):
-    """Detect if URL is playlist or single video"""
-    if "playlist?list=" in url or "&list=" in url:
-        return "playlist"
-    return "video"
+def get_base_ydl_opts():
+    """
+    Returns robust yt-dlp options to bypass YouTube bot detection & sign-in prompts.
+    Uses Android/iOS player clients and optional cookies.txt if available.
+    """
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+        'geo_bypass': True,
+        'retries': 10,
+        'fragment_retries': 10,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios', 'mweb', 'web'],
+                'player_skip': ['configs']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
+    }
+
+    # Automatically load cookies.txt if present in root directory
+    cookie_path = BASE_DIR / "cookies.txt"
+    if cookie_path.exists():
+        opts['cookiefile'] = str(cookie_path)
+
+    return opts
 
 def fetch_media_info(url):
     """
     Fetches detailed metadata for a video or playlist without downloading.
     Returns dict with media metadata and available formats.
     """
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
+    ydl_opts = get_base_ydl_opts()
+    ydl_opts.update({
         'extract_flat': 'in_playlist',  # Fast extraction for playlists
         'skip_download': True,
-    }
+    })
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             info = ydl.extract_info(url, download=False)
         except Exception as e:
-            raise RuntimeError(f"Failed to fetch video/playlist info: {str(e)}")
+            # Fallback retry with mweb/ios client if main client failed
+            try:
+                fallback_opts = get_base_ydl_opts()
+                fallback_opts['extractor_args'] = {'youtube': {'player_client': ['mweb', 'ios']}}
+                fallback_opts.update({'extract_flat': 'in_playlist', 'skip_download': True})
+                with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
+                    info = ydl_fb.extract_info(url, download=False)
+            except Exception as fb_err:
+                raise RuntimeError(f"Failed to fetch video/playlist info: {str(e)}")
 
     if not info:
         raise RuntimeError("No media info could be retrieved from the provided URL.")
 
-    # Check if entry is a playlist or single video
     is_playlist = info.get('_type') == 'playlist' or 'entries' in info
 
     if is_playlist:
@@ -105,13 +135,11 @@ def fetch_media_info(url):
         formats = info.get('formats', [])
         res_map = {}
         
-        # Extract unique resolutions with format details
         for f in formats:
             height = f.get('height')
             vcodec = f.get('vcodec', 'none')
             if height and vcodec != 'none':
                 res_key = f"{height}p"
-                # Keep highest bitrate or format with audio if available
                 filesize = f.get('filesize') or f.get('filesize_approx') or 0
                 if res_key not in res_map or filesize > res_map[res_key].get('filesize', 0):
                     res_map[res_key] = {
@@ -125,7 +153,6 @@ def fetch_media_info(url):
                         'vcodec': f.get('vcodec')
                     }
 
-        # Sort resolutions descending (1080p, 720p, 480p, etc.)
         sorted_resolutions = sorted(res_map.values(), key=lambda x: x['height'], reverse=True)
 
         return {
@@ -214,13 +241,11 @@ def start_download_thread(url, download_type, options, job_id):
     try:
         out_template = str(DOWNLOADS_DIR / f"{job_id}_%(title)s.%(ext)s")
         
-        ydl_opts = {
+        ydl_opts = get_base_ydl_opts()
+        ydl_opts.update({
             'outtmpl': out_template,
-            'quiet': True,
-            'no_warnings': True,
             'progress_hooks': [lambda d: progress_hook(d, job_id)],
-            'nocheckcertificate': True
-        }
+        })
 
         if download_type == 'audio':
             audio_format = options.get('audio_format', 'mp3')
@@ -233,7 +258,7 @@ def start_download_thread(url, download_type, options, job_id):
                     'preferredquality': bitrate if bitrate != '0' else None,
                 }],
             })
-        else: # video format
+        else:
             resolution = options.get('resolution', 'best')
             if resolution == 'best' or not resolution:
                 format_spec = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
@@ -250,7 +275,6 @@ def start_download_thread(url, download_type, options, job_id):
             info = ydl.extract_info(url, download=True)
             title = info.get('title', 'Downloaded Media')
             
-            # Find the actual output file created
             matched_files = list(DOWNLOADS_DIR.glob(f"{job_id}_*"))
             if not matched_files:
                 raise RuntimeError("File download completed but output file could not be located.")
@@ -301,7 +325,6 @@ def download_playlist_zip_thread(urls, download_type, options, job_id):
             sub_id = f"{job_id}_sub_{idx}"
             out_template = str(DOWNLOADS_DIR / f"{sub_id}_%(title)s.%(ext)s")
             
-            # Update batch progress
             base_progress = ((idx - 1) / total_count) * 100
             jobs[job_id].update({
                 'status': 'downloading',
@@ -310,12 +333,10 @@ def download_playlist_zip_thread(urls, download_type, options, job_id):
                 'eta': f'Processing {idx}/{total_count}'
             })
 
-            ydl_opts = {
+            ydl_opts = get_base_ydl_opts()
+            ydl_opts.update({
                 'outtmpl': out_template,
-                'quiet': True,
-                'no_warnings': True,
-                'nocheckcertificate': True
-            }
+            })
 
             if download_type == 'audio':
                 audio_format = options.get('audio_format', 'mp3')
@@ -349,7 +370,6 @@ def download_playlist_zip_thread(urls, download_type, options, job_id):
         if not downloaded_files:
             raise RuntimeError("Failed to download any of the selected playlist videos.")
 
-        # Create Zip archive
         jobs[job_id].update({
             'status': 'converting',
             'progress': 95.0,
@@ -362,11 +382,9 @@ def download_playlist_zip_thread(urls, download_type, options, job_id):
 
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for fpath in downloaded_files:
-                # Remove prefix sub_id
                 original_name = fpath.name.replace(f"{fpath.name.split('_')[0]}_{fpath.name.split('_')[1]}_", "")
                 zipf.write(fpath, arcname=original_name)
 
-        # Cleanup individual temp files after zipping
         for fpath in downloaded_files:
             try:
                 fpath.unlink()
