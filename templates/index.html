@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TubeGrab Pro - YouTube Video & Playlist Downloader</title>
+    <!-- Google Fonts & FontAwesome -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="navbar">
+            <div class="logo">
+                <div class="logo-icon">
+                    <i class="fa-solid fa-play"></i>
+                </div>
+                <div class="logo-text">
+                    <span class="brand-title">TubeGrab <span class="badge-pro">PRO</span></span>
+                    <span class="brand-sub">Video & Playlist Downloader</span>
+                </div>
+            </div>
+            <div class="header-badges">
+                <span class="badge-item"><i class="fa-solid fa-bolt"></i> Ultra Fast</span>
+                <span class="badge-item"><i class="fa-solid fa-layer-group"></i> Playlist Support</span>
+                <span class="badge-item"><i class="fa-solid fa-music"></i> All Video & Audio Formats</span>
+            </div>
+        </header>
+
+        <!-- Hero Search Section -->
+        <main class="main-content">
+            <section class="hero-section">
+                <h1 class="hero-title">Download YouTube Videos & Playlists</h1>
+                <p class="hero-subtitle">Paste any YouTube link, channel video, or full playlist URL to convert & download in MP4, MP3, M4A, WAV, FLAC, or ZIP formats.</p>
+
+                <!-- Search Form -->
+                <div class="search-card">
+                    <div class="input-wrapper">
+                        <i class="fa-brands fa-youtube input-icon"></i>
+                        <input type="text" id="urlInput" placeholder="Paste YouTube Video or Playlist link here..." autocomplete="off">
+                        <button type="button" class="btn-icon" id="clearBtn" title="Clear input">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                        <button type="button" class="btn-paste" id="pasteBtn" title="Paste from clipboard">
+                            <i class="fa-regular fa-clipboard"></i> Paste
+                        </button>
+                    </div>
+                    <button id="fetchBtn" class="btn-fetch">
+                        <span class="btn-text"><i class="fa-solid fa-magnifying-glass"></i> Analyze Link</span>
+                        <div class="spinner hidden" id="fetchSpinner"></div>
+                    </button>
+                </div>
+
+                <!-- Error Box -->
+                <div id="errorAlert" class="alert-box error hidden">
+                    <i class="fa-solid fa-circle-exclamation"></i>
+                    <span id="errorMessage">An error occurred while processing link.</span>
+                </div>
+            </section>
+
+            <!-- Inline Downloading Progress Container (Animated UI) -->
+            <section id="downloadProgressSection" class="download-progress-card hidden">
+                <div class="loading-ui-header">
+                    <div class="animated-icon-wrapper">
+                        <div class="pulse-ring"></div>
+                        <i class="fa-solid fa-cloud-arrow-down download-animated-icon"></i>
+                    </div>
+                    <div class="download-title-meta">
+                        <span class="download-badge-status" id="dlStatusBadge">Downloading...</span>
+                        <h3 id="dlActiveTitle" class="active-download-title">Preparing download...</h3>
+                    </div>
+                </div>
+
+                <!-- Progress Bar & Waves -->
+                <div class="progress-container">
+                    <div class="progress-bar-bg">
+                        <div id="dlProgressBar" class="progress-bar-fill" style="width: 0%">
+                            <div class="progress-glow"></div>
+                        </div>
+                    </div>
+                    <div class="progress-info-row">
+                        <span id="dlSpeedText" class="speed-meta"><i class="fa-solid fa-gauge-high"></i> Starting process...</span>
+                        <span id="dlPercentText" class="percent-meta">0%</span>
+                    </div>
+                </div>
+
+                <!-- Complete Action Button -->
+                <div id="dlCompleteBox" class="dl-complete-action hidden">
+                    <a id="dlSaveFileBtn" class="btn-save-file-big" href="#" download>
+                        <i class="fa-solid fa-circle-down"></i> Save File to Computer
+                    </a>
+                </div>
+            </section>
+
+            <!-- Media Results Section -->
+            <section id="resultsSection" class="results-container hidden">
+                <!-- Single Video View -->
+                <div id="singleVideoCard" class="media-card hidden">
+                    <div class="media-header">
+                        <div class="thumbnail-wrapper">
+                            <img id="videoThumb" src="" alt="Video Thumbnail">
+                            <span class="duration-tag" id="videoDuration">00:00</span>
+                        </div>
+                        <div class="media-details">
+                            <div class="badge-type"><i class="fa-solid fa-film"></i> Single Video</div>
+                            <h2 id="videoTitle" class="video-title">Video Title</h2>
+                            <p class="uploader-name"><i class="fa-regular fa-circle-user"></i> <span id="videoUploader">Channel</span></p>
+                            <div class="meta-row">
+                                <span><i class="fa-regular fa-eye"></i> <span id="videoViews">0</span> views</span>
+                                <span><i class="fa-regular fa-clock"></i> <span id="videoDurationText">00:00</span></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Quality Format Selector Tabs -->
+                    <div class="format-tabs">
+                        <button class="tab-btn active" data-tab="tab-video"><i class="fa-solid fa-video"></i> Video Formats (MP4 / WEBM)</button>
+                        <button class="tab-btn" data-tab="tab-audio"><i class="fa-solid fa-headphones"></i> Audio Formats (MP3 / M4A / WAV / FLAC)</button>
+                    </div>
+
+                    <!-- Video Formats Tab Content -->
+                    <div id="tab-video" class="tab-content active">
+                        <div class="format-grid" id="videoFormatsGrid">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+
+                    <!-- Audio Formats Tab Content -->
+                    <div id="tab-audio" class="tab-content">
+                        <div class="format-grid" id="audioFormatsGrid">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Playlist View -->
+                <div id="playlistCard" class="media-card hidden">
+                    <div class="playlist-header">
+                        <div class="playlist-meta">
+                            <div class="thumbnail-wrapper sm">
+                                <img id="playlistThumb" src="" alt="Playlist Thumbnail">
+                            </div>
+                            <div class="media-details">
+                                <div class="badge-type playlist"><i class="fa-solid fa-list-check"></i> YouTube Playlist</div>
+                                <h2 id="playlistTitle" class="video-title">Playlist Title</h2>
+                                <p class="uploader-name"><i class="fa-regular fa-circle-user"></i> <span id="playlistUploader">Channel</span></p>
+                                <span class="badge-count"><i class="fa-solid fa-video"></i> <span id="playlistTotalCount">0</span> Videos</span>
+                            </div>
+                        </div>
+
+                        <!-- Playlist Batch Controls -->
+                        <div class="playlist-batch-box">
+                            <div class="batch-options">
+                                <div class="select-group">
+                                    <label><i class="fa-solid fa-sliders"></i> Batch ZIP Format:</label>
+                                    <select id="batchFormatSelect">
+                                        <optgroup label="Video Formats (MP4)">
+                                            <option value="video_1080p">Video - 1080p Full HD (MP4)</option>
+                                            <option value="video_720p" selected>Video - 720p HD (MP4)</option>
+                                            <option value="video_480p">Video - 480p SD (MP4)</option>
+                                            <option value="video_360p">Video - 360p (MP4)</option>
+                                        </optgroup>
+                                        <optgroup label="Audio Formats">
+                                            <option value="audio_mp3_320">Audio - MP3 (320kbps High Quality)</option>
+                                            <option value="audio_mp3_192">Audio - MP3 (192kbps Standard)</option>
+                                            <option value="audio_m4a_128">Audio - M4A (AAC)</option>
+                                            <option value="audio_wav_0">Audio - WAV (Lossless)</option>
+                                            <option value="audio_flac_0">Audio - FLAC (Lossless)</option>
+                                        </optgroup>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="batch-actions">
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="selectAllCheckbox" checked>
+                                    <span class="checkmark"></span>
+                                    Select All (<span id="selectedCountText">0</span>)
+                                </label>
+
+                                <button id="downloadSelectedZipBtn" class="btn-download-batch">
+                                    <i class="fa-solid fa-file-zipper"></i> Download Selected as ZIP
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Playlist Items Table / Grid -->
+                    <div class="playlist-items-list" id="playlistItemsList">
+                        <!-- Items rendered dynamically with full format dropdowns -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Features Grid -->
+            <section class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fa-solid fa-film"></i></div>
+                    <h3>Full HD & 4K Quality</h3>
+                    <p>Download YouTube videos in 1080p, 720p, 480p, 360p, or best available quality.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fa-solid fa-music"></i></div>
+                    <h3>All Audio Formats</h3>
+                    <p>Extract audio in MP3 (up to 320kbps), M4A, FLAC, or WAV formats with 1 click.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fa-solid fa-file-zipper"></i></div>
+                    <h3>1-Click Playlist ZIP</h3>
+                    <p>Download entire playlists in a single click bundled into a ZIP file archive.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fa-solid fa-mobile-screen"></i></div>
+                    <h3>100% Mobile Friendly</h3>
+                    <p>Responsive design optimized for smartphones, tablets, laptops, and desktops.</p>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>&copy; 2026 TubeGrab PRO. High-performance YouTube Video & Playlist Downloader.</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
