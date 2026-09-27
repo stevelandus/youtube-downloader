@@ -5,8 +5,13 @@ import time
 import zipfile
 import threading
 import uuid
+import subprocess
+import shutil
+import base64
 from pathlib import Path
+import requests
 import yt_dlp
+from yt_dlp.utils import download_range_func
 import static_ffmpeg
 
 # Ensure ffmpeg and ffprobe are in system PATH
@@ -19,9 +24,37 @@ except Exception as e:
 BASE_DIR = Path(__file__).resolve().parent
 DOWNLOADS_DIR = BASE_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
+COOKIE_FILE_PATH = BASE_DIR / "cookies.txt"
 
 # In-memory storage for active/completed download jobs
 jobs = {}
+
+def init_cookies():
+    """
+    Check if cookies are provided via environment variables (ideal for Render/Docker/Railway cloud deployments).
+    Supports YOUTUBE_COOKIES (raw Netscape string) or YOUTUBE_COOKIES_BASE64.
+    """
+    raw_cookies = os.environ.get("YOUTUBE_COOKIES", "").strip()
+    b64_cookies = os.environ.get("YOUTUBE_COOKIES_BASE64", "").strip()
+
+    if raw_cookies:
+        try:
+            with open(COOKIE_FILE_PATH, "w", encoding="utf-8") as f:
+                f.write(raw_cookies)
+            print("[TubeGrab] Successfully generated cookies.txt from YOUTUBE_COOKIES env var.")
+        except Exception as e:
+            print(f"[TubeGrab] Error writing YOUTUBE_COOKIES: {e}")
+    elif b64_cookies:
+        try:
+            decoded = base64.b64decode(b64_cookies).decode('utf-8')
+            with open(COOKIE_FILE_PATH, "w", encoding="utf-8") as f:
+                f.write(decoded)
+            print("[TubeGrab] Successfully generated cookies.txt from YOUTUBE_COOKIES_BASE64 env var.")
+        except Exception as e:
+            print(f"[TubeGrab] Error writing YOUTUBE_COOKIES_BASE64: {e}")
+
+# Initialize cookies on module load
+init_cookies()
 
 def clean_old_files(max_age_seconds=3600):
     """Background task to remove files older than max_age_seconds"""
@@ -42,21 +75,107 @@ def sanitize_filename(name):
     name = re.sub(r'[\\/*?:"<>|]', '', name)
     return name.strip() or "video"
 
-def get_base_ydl_opts():
+def normalize_youtube_url(url):
     """
-    Returns robust yt-dlp options to bypass YouTube bot detection & sign-in prompts.
-    Uses Android/iOS player clients and optional cookies.txt if available.
+    Normalizes various YouTube URL formats (live, shorts, youtu.be, embed)
+    into standard canonical watch / playlist URLs and strips tracking parameters.
     """
+    if not url:
+        return url
+    url = url.strip()
+    
+    # Handle /live/, /shorts/, youtu.be, /embed/, /v/
+    match = re.search(r'(?:youtube\.com/(?:live/|shorts/|embed/|v/)|youtu\.be/)([a-zA-Z0-9_-]{11})', url)
+    if match:
+        video_id = match.group(1)
+        list_match = re.search(r'[?&]list=([a-zA-Z0-9_-]+)', url)
+        if list_match:
+            return f"https://www.youtube.com/watch?v={video_id}&list={list_match.group(1)}"
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return url
+
+def parse_time_to_seconds(time_val):
+    """Convert HH:MM:SS or MM:SS or seconds string/number into seconds float"""
+    if time_val is None:
+        return None
+    if isinstance(time_val, (int, float)):
+        return float(time_val)
+    time_str = str(time_val).strip()
+    if not time_str:
+        return None
+    parts = time_str.split(':')
+    try:
+        if len(parts) == 1:
+            return float(parts[0])
+        elif len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+        elif len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    except (ValueError, TypeError):
+        return None
+    return None
+
+def trim_media_file(input_file, start_sec, end_sec):
+    """
+    Trim downloaded media file using FFmpeg to exact start/end timestamps.
+    """
+    input_path = Path(input_file)
+    if not input_path.exists():
+        return False
+        
+    output_path = input_path.with_name(f"trim_{input_path.name}")
+    
+    cmd = ['ffmpeg', '-y']
+    if start_sec is not None and start_sec > 0:
+        cmd.extend(['-ss', str(start_sec)])
+    if end_sec is not None and end_sec > 0:
+        if start_sec is not None and start_sec > 0:
+            cmd.extend(['-to', str(end_sec)])
+        else:
+            cmd.extend(['-t', str(end_sec)])
+            
+    cmd.extend(['-i', str(input_path), '-c', 'copy', str(output_path)])
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+        input_path.unlink(missing_ok=True)
+        output_path.rename(input_path)
+        return True
+    else:
+        # Fallback with re-encoding in case stream copy fails at non-keyframes
+        cmd_fallback = ['ffmpeg', '-y']
+        if start_sec is not None and start_sec > 0:
+            cmd_fallback.extend(['-ss', str(start_sec)])
+        if end_sec is not None and end_sec > 0:
+            cmd_fallback.extend(['-to', str(end_sec)])
+        cmd_fallback.extend(['-i', str(input_path), str(output_path)])
+        res2 = subprocess.run(cmd_fallback, capture_output=True, text=True)
+        if res2.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+            input_path.unlink(missing_ok=True)
+            output_path.rename(input_path)
+            return True
+            
+    return False
+
+def get_base_ydl_opts(client_list=None):
+    """
+    Returns robust yt-dlp options configured for cloud IP compatibility and reliability.
+    """
+    if client_list is None:
+        client_list = ['android', 'ios', 'tv', 'mweb']
+
     opts = {
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
         'geo_bypass': True,
-        'retries': 10,
-        'fragment_retries': 10,
+        'retries': 3,
+        'fragment_retries': 3,
+        'socket_timeout': 20,
+        'live_from_start': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios', 'mweb', 'web'],
+                'player_client': client_list,
                 'player_skip': ['configs']
             }
         },
@@ -66,40 +185,113 @@ def get_base_ydl_opts():
         }
     }
 
-    # Automatically load cookies.txt if present in root directory
-    cookie_path = BASE_DIR / "cookies.txt"
-    if cookie_path.exists():
-        opts['cookiefile'] = str(cookie_path)
+    # Auto-detect cookies.txt in root directory
+    if COOKIE_FILE_PATH.exists() and COOKIE_FILE_PATH.stat().st_size > 0:
+        opts['cookiefile'] = str(COOKIE_FILE_PATH)
+
+    # Optional proxy support via environment variable
+    proxy = os.environ.get("PROXY_URL") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+    if proxy:
+        opts['proxy'] = proxy
 
     return opts
 
+def fetch_oembed_fallback(url):
+    """
+    Fallback metadata extractor using official YouTube oEmbed API when cloud IP is bot-blocked.
+    Never blocked by YouTube datacenter IP checks.
+    """
+    clean_url = normalize_youtube_url(url)
+    match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', clean_url)
+    if not match:
+        match = re.search(r'([a-zA-Z0-9_-]{11})', clean_url)
+    video_id = match.group(1) if match else "video"
+
+    try:
+        resp = requests.get(
+            f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json",
+            timeout=8
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            title = data.get('title', 'YouTube Video')
+            uploader = data.get('author_name', 'YouTube Creator')
+            thumbnail = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+            return {
+                'is_playlist': False,
+                'id': video_id,
+                'title': title,
+                'uploader': uploader,
+                'duration': None,
+                'duration_str': 'Full Duration',
+                'views': None,
+                'views_str': 'Available',
+                'thumbnail': thumbnail,
+                'webpage_url': f"https://www.youtube.com/watch?v={video_id}",
+                'video_resolutions': [
+                    {'resolution': '1080p', 'height': 1080, 'ext': 'mp4', 'filesize': 0, 'filesize_str': 'Full HD 1080p'},
+                    {'resolution': '720p', 'height': 720, 'ext': 'mp4', 'filesize': 0, 'filesize_str': 'HD 720p (Recommended)'},
+                    {'resolution': '480p', 'height': 480, 'ext': 'mp4', 'filesize': 0, 'filesize_str': 'Standard 480p'},
+                    {'resolution': '360p', 'height': 360, 'ext': 'mp4', 'filesize': 0, 'filesize_str': 'Compact 360p'}
+                ],
+                'audio_options': [
+                    {'format': 'mp3', 'label': 'MP3 (High Quality 320kbps)', 'bitrate': '320'},
+                    {'format': 'mp3', 'label': 'MP3 (Standard Quality 192kbps)', 'bitrate': '192'},
+                    {'format': 'm4a', 'label': 'M4A (AAC Audio)', 'bitrate': '128'},
+                    {'format': 'wav', 'label': 'WAV (Uncompressed Lossless)', 'bitrate': '0'}
+                ]
+            }
+    except Exception as err:
+        print(f"[TubeGrab] oEmbed fallback error: {err}")
+    return None
+
 def fetch_media_info(url):
     """
-    Fetches detailed metadata for a video or playlist without downloading.
-    Returns dict with media metadata and available formats.
+    Fetches detailed metadata for a video or playlist with fallback client retries
+    and graceful oEmbed fallback on cloud hosting.
     """
-    ydl_opts = get_base_ydl_opts()
-    ydl_opts.update({
-        'extract_flat': 'in_playlist',  # Fast extraction for playlists
-        'skip_download': True,
-    })
+    # Refresh cookies if updated
+    init_cookies()
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    # Normalize URL (handles /live/, /shorts/, youtu.be, etc.)
+    url = normalize_youtube_url(url)
+
+    client_attempts = [
+        ['android', 'ios'],
+        ['web']
+    ]
+
+    last_error = None
+    info = None
+
+    for clients in client_attempts:
+        ydl_opts = get_base_ydl_opts(clients)
+        ydl_opts.update({
+            'extract_flat': 'in_playlist',
+            'skip_download': True,
+        })
         try:
-            info = ydl.extract_info(url, download=False)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info:
+                    break
         except Exception as e:
-            # Fallback retry with mweb/ios client if main client failed
-            try:
-                fallback_opts = get_base_ydl_opts()
-                fallback_opts['extractor_args'] = {'youtube': {'player_client': ['mweb', 'ios']}}
-                fallback_opts.update({'extract_flat': 'in_playlist', 'skip_download': True})
-                with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
-                    info = ydl_fb.extract_info(url, download=False)
-            except Exception as fb_err:
-                raise RuntimeError(f"Failed to fetch video/playlist info: {str(e)}")
+            last_error = str(e)
+            continue
 
     if not info:
-        raise RuntimeError("No media info could be retrieved from the provided URL.")
+        # Check if oEmbed fallback can retrieve video metadata
+        fallback_data = fetch_oembed_fallback(url)
+        if fallback_data:
+            return fallback_data
+
+        if 'Sign in to confirm you' in str(last_error):
+            raise RuntimeError(
+                "YouTube Bot Check: Cloud IP is blocked by YouTube. "
+                "Please configure YOUTUBE_COOKIES in Render Environment Variables or run locally."
+            )
+        raise RuntimeError(f"Failed to fetch video/playlist info: {last_error or 'Unknown error'}")
 
     is_playlist = info.get('_type') == 'playlist' or 'entries' in info
 
@@ -131,7 +323,6 @@ def fetch_media_info(url):
             'entries': entries
         }
     else:
-        # Single Video Detailed Formats Analysis
         formats = info.get('formats', [])
         res_map = {}
         
@@ -225,8 +416,11 @@ def progress_hook(d, job_id):
         })
 
 def start_download_thread(url, download_type, options, job_id):
-    """Thread target function to download video or audio using yt-dlp"""
+    """Thread target function to download video or audio using yt-dlp with trimming support"""
     clean_old_files()
+    init_cookies()
+    url = normalize_youtube_url(url)
+
     jobs[job_id] = {
         'status': 'queued',
         'progress': 0,
@@ -246,6 +440,15 @@ def start_download_thread(url, download_type, options, job_id):
             'outtmpl': out_template,
             'progress_hooks': [lambda d: progress_hook(d, job_id)],
         })
+
+        # Check trimming parameters
+        start_sec = parse_time_to_seconds(options.get('start_time'))
+        end_sec = parse_time_to_seconds(options.get('end_time'))
+        is_trimmed = (start_sec is not None and start_sec > 0) or (end_sec is not None and end_sec > 0)
+
+        if is_trimmed:
+            ydl_opts['download_ranges'] = download_range_func(None, [(start_sec or 0, end_sec or float('inf'))])
+            ydl_opts['force_keyframes_at_cuts'] = True
 
         if download_type == 'audio':
             audio_format = options.get('audio_format', 'mp3')
@@ -280,21 +483,36 @@ def start_download_thread(url, download_type, options, job_id):
                 raise RuntimeError("File download completed but output file could not be located.")
             
             final_file = matched_files[0]
-            clean_filename = f"{sanitize_filename(title)}{final_file.suffix}"
+            
+            # Post-cut verification with FFmpeg if trimming requested
+            if is_trimmed:
+                try:
+                    trim_media_file(final_file, start_sec, end_sec)
+                except Exception as trim_err:
+                    print(f"Warning: post-trim failed, using raw download: {trim_err}")
+
+            clip_tag = "_clip" if is_trimmed else ""
+            clean_filename = f"{sanitize_filename(title)}{clip_tag}{final_file.suffix}"
             
             jobs[job_id].update({
                 'status': 'finished',
                 'progress': 100.0,
                 'filename': clean_filename,
                 'file_path': str(final_file),
-                'title': title
+                'title': f"{title} (Trimmed Clip)" if is_trimmed else title
             })
 
     except Exception as e:
-        print(f"Error in download thread for job {job_id}: {e}")
+        err_str = str(e)
+        print(f"Error in download thread for job {job_id}: {err_str}")
+        if 'Sign in to confirm you' in err_str:
+            err_str = (
+                "YouTube Cloud IP Block: Render server IP is blocked by YouTube BotGuard. "
+                "Please add YOUTUBE_COOKIES in Render Environment Variables or run TubeGrab locally."
+            )
         jobs[job_id].update({
             'status': 'error',
-            'error_msg': str(e)
+            'error_msg': err_str
         })
 
 def download_playlist_zip_thread(urls, download_type, options, job_id):
@@ -321,7 +539,8 @@ def download_playlist_zip_thread(urls, download_type, options, job_id):
     downloaded_files = []
     
     try:
-        for idx, video_url in enumerate(urls, 1):
+        for idx, raw_url in enumerate(urls, 1):
+            video_url = normalize_youtube_url(raw_url)
             sub_id = f"{job_id}_sub_{idx}"
             out_template = str(DOWNLOADS_DIR / f"{sub_id}_%(title)s.%(ext)s")
             

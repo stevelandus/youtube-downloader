@@ -60,6 +60,13 @@
                     <i class="fa-solid fa-circle-exclamation"></i>
                     <span id="errorMessage">An error occurred while processing link.</span>
                 </div>
+
+                <!-- Cloud Hosting Note / Quick Guide -->
+                <div class="cloud-guide-bar">
+                    <button type="button" id="openRenderGuideBtn" class="btn-guide-pill">
+                        <i class="fa-solid fa-cloud-bolt"></i> Running on Render/Cloud? How to bypass YouTube bot checks
+                    </button>
+                </div>
             </section>
 
             <!-- Inline Downloading Progress Container (Animated UI) -->
@@ -112,6 +119,42 @@
                             <div class="meta-row">
                                 <span><i class="fa-regular fa-eye"></i> <span id="videoViews">0</span> views</span>
                                 <span><i class="fa-regular fa-clock"></i> <span id="videoDurationText">00:00</span></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Video Trimmer / Clip Cutter Section -->
+                    <div class="trimmer-card">
+                        <div class="trimmer-header">
+                            <label class="trimmer-toggle" for="enableTrimCheckbox">
+                                <input type="checkbox" id="enableTrimCheckbox">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-text"><i class="fa-solid fa-scissors"></i> Trim & Cut Video Clip <span class="badge-opt">Optional</span></span>
+                            </label>
+                            <span id="trimClipDurationBadge" class="trim-badge hidden">
+                                <i class="fa-solid fa-stopwatch"></i> Clip Length: <span id="trimClipDurationText">00:00</span>
+                            </span>
+                        </div>
+                        <div id="trimmerControls" class="trimmer-controls hidden">
+                            <div class="time-inputs-grid">
+                                <div class="time-field">
+                                    <label for="trimStartInput"><i class="fa-solid fa-circle-play"></i> Start Time</label>
+                                    <input type="text" id="trimStartInput" placeholder="00:00:00" value="00:00:00">
+                                    <span class="field-hint">HH:MM:SS or MM:SS</span>
+                                </div>
+                                <div class="time-separator"><i class="fa-solid fa-arrow-right-long"></i></div>
+                                <div class="time-field">
+                                    <label for="trimEndInput"><i class="fa-solid fa-circle-stop"></i> End Time</label>
+                                    <input type="text" id="trimEndInput" placeholder="00:01:00">
+                                    <span class="field-hint">HH:MM:SS or MM:SS</span>
+                                </div>
+                            </div>
+                            <div class="trim-quick-actions">
+                                <span class="quick-label">Presets:</span>
+                                <button type="button" class="btn-trim-preset" data-preset="reset">Full Video</button>
+                                <button type="button" class="btn-trim-preset" data-preset="30s">+30s Clip</button>
+                                <button type="button" class="btn-trim-preset" data-preset="60s">+60s Clip</button>
+                                <button type="button" class="btn-trim-preset" data-preset="120s">+2m Clip</button>
                             </div>
                         </div>
                     </div>
@@ -225,6 +268,63 @@
         <footer class="footer">
             <p>&copy; 2026 TubeGrab PRO. High-performance YouTube Video & Playlist Downloader.</p>
         </footer>
+    </div>
+
+    <!-- Cloud Deployment & YouTube Bot Bypass Guide Modal -->
+    <div id="renderModal" class="modal-backdrop hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-header-title">
+                    <i class="fa-solid fa-cloud-arrow-up modal-header-icon"></i>
+                    <div>
+                        <h3>Deploying on Render / Cloud Host?</h3>
+                        <p class="modal-subtitle">How to bypass YouTube's "Sign in to confirm you're not a bot" error</p>
+                    </div>
+                </div>
+                <button type="button" class="btn-modal-close" id="closeRenderModalBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="guide-intro-banner">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    <div>
+                        <strong>Why does this happen on Render?</strong>
+                        <p>YouTube blocks automated traffic coming from cloud hosting IPs (Render, AWS, DigitalOcean). Your local PC works because it's a residential IP.</p>
+                    </div>
+                </div>
+
+                <h4 class="guide-steps-title"><i class="fa-solid fa-list-ol"></i> 2-Minute Solution:</h4>
+                <div class="guide-steps-list">
+                    <div class="step-card">
+                        <span class="step-num">1</span>
+                        <div class="step-content">
+                            <strong>Export YouTube Cookies</strong>
+                            <p>Install the free extension <strong>"Get cookies.txt LOCALLY"</strong> on Chrome or Firefox, open <a href="https://www.youtube.com" target="_blank" rel="noopener">youtube.com</a>, and export your cookies file.</p>
+                        </div>
+                    </div>
+                    <div class="step-card">
+                        <span class="step-num">2</span>
+                        <div class="step-content">
+                            <strong>Add Variable in Render Dashboard</strong>
+                            <p>In your Render Web Service &rarr; <strong>Environment</strong> tab, add a new environment variable:</p>
+                            <div class="code-box">
+                                <span class="code-key">Key:</span> <code>YOUTUBE_COOKIES</code><br>
+                                <span class="code-key">Value:</span> <code>[Paste the complete text from your exported cookies.txt]</code>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="step-card">
+                        <span class="step-num">3</span>
+                        <div class="step-content">
+                            <strong>Save & Re-deploy</strong>
+                            <p>Render will automatically restart the server with authenticated YouTube cookies. Both standard videos and live streams will download flawlessly!</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-primary" id="gotItBtn"><i class="fa-solid fa-check"></i> I Understand</button>
+            </div>
+        </div>
     </div>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>

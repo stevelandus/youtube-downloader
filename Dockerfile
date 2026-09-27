@@ -1,9 +1,11 @@
 FROM python:3.11-slim
 
-# Install system dependencies including ffmpeg
+# Install system dependencies including ffmpeg, nodejs (required for yt-dlp JS challenges), and ca-certificates
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    nodejs \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

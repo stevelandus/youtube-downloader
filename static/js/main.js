@@ -49,10 +49,114 @@ document.addEventListener('DOMContentLoaded', () => {
     const downloadSelectedZipBtn = document.getElementById('downloadSelectedZipBtn');
     const batchFormatSelect = document.getElementById('batchFormatSelect');
 
+    // Trimmer elements
+    const enableTrimCheckbox = document.getElementById('enableTrimCheckbox');
+    const trimmerControls = document.getElementById('trimmerControls');
+    const trimmerCard = document.querySelector('.trimmer-card');
+    const trimStartInput = document.getElementById('trimStartInput');
+    const trimEndInput = document.getElementById('trimEndInput');
+    const trimClipDurationBadge = document.getElementById('trimClipDurationBadge');
+    const trimClipDurationText = document.getElementById('trimClipDurationText');
+
+    // Cloud Guide Modal elements
+    const openRenderGuideBtn = document.getElementById('openRenderGuideBtn');
+    const renderModal = document.getElementById('renderModal');
+    const closeRenderModalBtn = document.getElementById('closeRenderModalBtn');
+    const gotItBtn = document.getElementById('gotItBtn');
+
     // State
     let currentMediaData = null;
     let currentActiveJobId = null;
     let activePollInterval = null;
+
+    // Trimmer event listeners
+    if (enableTrimCheckbox) {
+        enableTrimCheckbox.addEventListener('change', () => {
+            if (enableTrimCheckbox.checked) {
+                trimmerControls.classList.remove('hidden');
+                if (trimmerCard) trimmerCard.classList.add('active');
+                updateTrimDuration();
+            } else {
+                trimmerControls.classList.add('hidden');
+                if (trimmerCard) trimmerCard.classList.remove('active');
+                if (trimClipDurationBadge) trimClipDurationBadge.classList.add('hidden');
+            }
+        });
+    }
+
+    function parseTimeToSeconds(str) {
+        if (!str) return 0;
+        const parts = str.trim().split(':').map(Number);
+        if (parts.some(isNaN)) return 0;
+        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+        if (parts.length === 2) return parts[0] * 60 + parts[1];
+        if (parts.length === 1) return parts[0];
+        return 0;
+    }
+
+    function formatSecondsToTime(sec) {
+        if (!sec || sec < 0) return '00:00';
+        sec = Math.floor(sec);
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        const s = sec % 60;
+        const pad = (n) => String(n).padStart(2, '0');
+        if (h > 0) return `${pad(h)}:${pad(m)}:${pad(s)}`;
+        return `${pad(m)}:${pad(s)}`;
+    }
+
+    function updateTrimDuration() {
+        if (!enableTrimCheckbox || !enableTrimCheckbox.checked) return;
+        const sSec = parseTimeToSeconds(trimStartInput.value);
+        const eSec = parseTimeToSeconds(trimEndInput.value);
+        if (eSec > sSec) {
+            const diff = eSec - sSec;
+            trimClipDurationText.textContent = formatSecondsToTime(diff);
+            trimClipDurationBadge.classList.remove('hidden');
+        } else {
+            trimClipDurationBadge.classList.add('hidden');
+        }
+    }
+
+    if (trimStartInput && trimEndInput) {
+        trimStartInput.addEventListener('input', updateTrimDuration);
+        trimEndInput.addEventListener('input', updateTrimDuration);
+    }
+
+    // Presets
+    document.querySelectorAll('.btn-trim-preset').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const preset = btn.dataset.preset;
+            const startSec = parseTimeToSeconds(trimStartInput.value) || 0;
+            if (preset === 'reset') {
+                trimStartInput.value = '00:00:00';
+                trimEndInput.value = currentMediaData?.duration ? formatSecondsToTime(currentMediaData.duration) : '00:01:00';
+            } else if (preset === '30s') {
+                trimEndInput.value = formatSecondsToTime(startSec + 30);
+            } else if (preset === '60s') {
+                trimEndInput.value = formatSecondsToTime(startSec + 60);
+            } else if (preset === '120s') {
+                trimEndInput.value = formatSecondsToTime(startSec + 120);
+            }
+            updateTrimDuration();
+        });
+    });
+
+    // Cloud Modal Handlers
+    if (openRenderGuideBtn && renderModal) {
+        openRenderGuideBtn.addEventListener('click', () => renderModal.classList.remove('hidden'));
+    }
+    if (closeRenderModalBtn && renderModal) {
+        closeRenderModalBtn.addEventListener('click', () => renderModal.classList.add('hidden'));
+    }
+    if (gotItBtn && renderModal) {
+        gotItBtn.addEventListener('click', () => renderModal.classList.add('hidden'));
+    }
+    if (renderModal) {
+        renderModal.addEventListener('click', (e) => {
+            if (e.target === renderModal) renderModal.classList.add('hidden');
+        });
+    }
 
     // Input handlers
     clearBtn.addEventListener('click', () => {
@@ -147,6 +251,18 @@ document.addEventListener('DOMContentLoaded', () => {
             videoUploader.textContent = info.uploader;
             videoViews.textContent = info.views_str;
             videoDurationText.textContent = info.duration_str;
+
+            // Reset trimmer controls
+            if (enableTrimCheckbox) {
+                enableTrimCheckbox.checked = false;
+                trimmerControls.classList.add('hidden');
+                if (trimmerCard) trimmerCard.classList.remove('active');
+                if (trimClipDurationBadge) trimClipDurationBadge.classList.add('hidden');
+            }
+            if (trimStartInput) trimStartInput.value = '00:00:00';
+            if (trimEndInput) {
+                trimEndInput.value = info.duration ? formatSecondsToTime(info.duration) : '00:01:00';
+            }
 
             renderVideoFormats(info.video_resolutions, info.webpage_url, info.title);
             renderAudioFormats(info.audio_options, info.webpage_url, info.title);
@@ -351,6 +467,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Start Single Download Job
     async function startSingleDownload(url, type, options, mediaTitle) {
         try {
+            // Attach trimming options if active
+            if (enableTrimCheckbox && enableTrimCheckbox.checked) {
+                options = {
+                    ...options,
+                    trim_enabled: true,
+                    start_time: trimStartInput.value.trim(),
+                    end_time: trimEndInput.value.trim()
+                };
+            }
+
             const response = await fetch('/api/download/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -468,7 +594,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function showError(msg) {
-        errorMessage.textContent = msg;
+        if (msg.includes('Render') || msg.includes('Bot') || msg.includes('YOUTUBE_COOKIES') || msg.includes('Cloud IP') || msg.includes('bot')) {
+            errorMessage.innerHTML = `<span>${msg}</span> <button type="button" class="btn-guide-pill" id="openRenderFromError" style="margin-top: 8px; font-size: 11px; padding: 4px 10px;"><i class="fa-solid fa-cloud-arrow-up"></i> View 2-Min Render Fix</button>`;
+            const fixBtn = document.getElementById('openRenderFromError');
+            if (fixBtn && renderModal) {
+                fixBtn.addEventListener('click', () => renderModal.classList.remove('hidden'));
+            }
+        } else {
+            errorMessage.textContent = msg;
+        }
         errorAlert.classList.remove('hidden');
     }
 
