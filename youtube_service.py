@@ -161,9 +161,6 @@ def get_base_ydl_opts(client_list=None):
     """
     Returns robust yt-dlp options configured for cloud IP compatibility and reliability.
     """
-    if client_list is None:
-        client_list = ['android', 'ios', 'tv', 'mweb']
-
     opts = {
         'quiet': True,
         'no_warnings': True,
@@ -173,17 +170,20 @@ def get_base_ydl_opts(client_list=None):
         'fragment_retries': 3,
         'socket_timeout': 20,
         'live_from_start': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': client_list,
-                'player_skip': ['configs']
-            }
-        },
+        'remote_components': ['ejs:github'],
+        'js_runtimes': {'node': {}},
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
+
+    if client_list:
+        opts['extractor_args'] = {
+            'youtube': {
+                'player_client': client_list
+            }
+        }
 
     # Auto-detect cookies.txt in root directory
     if COOKIE_FILE_PATH.exists() and COOKIE_FILE_PATH.stat().st_size > 0:
@@ -258,6 +258,7 @@ def fetch_media_info(url):
     url = normalize_youtube_url(url)
 
     client_attempts = [
+        None,  # Default smart client selection
         ['android', 'ios'],
         ['web']
     ]
