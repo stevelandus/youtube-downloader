@@ -74,11 +74,19 @@
                 <div class="loading-ui-header">
                     <div class="animated-icon-wrapper">
                         <div class="pulse-ring"></div>
-                        <i class="fa-solid fa-cloud-arrow-down download-animated-icon"></i>
+                        <div class="pulse-ring-outer"></div>
+                        <i class="fa-solid fa-cloud-arrow-down download-animated-icon" id="dlStatusIcon"></i>
                     </div>
                     <div class="download-title-meta">
-                        <span class="download-badge-status" id="dlStatusBadge">Downloading...</span>
-                        <h3 id="dlActiveTitle" class="active-download-title">Preparing download...</h3>
+                        <div class="badge-row">
+                            <span class="download-badge-status" id="dlStatusBadge">INITIALIZING...</span>
+                            <span class="download-badge-engine"><i class="fa-solid fa-bolt"></i> TURBO 16X STREAM</span>
+                        </div>
+                        <h3 id="dlActiveTitle" class="active-download-title">Preparing high-speed download...</h3>
+                    </div>
+                    <div class="big-percent-wrapper">
+                        <span id="dlBigPercent" class="big-percent-number">0.0%</span>
+                        <span class="big-percent-label">PROGRESS</span>
                     </div>
                 </div>
 
@@ -87,16 +95,41 @@
                     <div class="progress-bar-bg">
                         <div id="dlProgressBar" class="progress-bar-fill" style="width: 0%">
                             <div class="progress-glow"></div>
+                            <div class="progress-head-sparkle"></div>
                         </div>
                     </div>
                     <div class="progress-info-row">
-                        <span id="dlSpeedText" class="speed-meta"><i class="fa-solid fa-gauge-high"></i> Starting process...</span>
-                        <span id="dlPercentText" class="percent-meta">0%</span>
+                        <span id="dlSpeedText" class="speed-meta"><i class="fa-solid fa-circle-nodes"></i> Starting download streams...</span>
+                        <span id="dlPercentText" class="percent-meta">0.0%</span>
+                    </div>
+                </div>
+
+                <!-- Telemetry Cards Grid -->
+                <div class="telemetry-grid">
+                    <div class="telemetry-card">
+                        <span class="telemetry-label"><i class="fa-solid fa-gauge-high"></i> Speed</span>
+                        <span class="telemetry-value" id="dlSpeedVal">--</span>
+                    </div>
+                    <div class="telemetry-card">
+                        <span class="telemetry-label"><i class="fa-solid fa-hard-drive"></i> Transferred</span>
+                        <span class="telemetry-value" id="dlSizeVal">--</span>
+                    </div>
+                    <div class="telemetry-card">
+                        <span class="telemetry-label"><i class="fa-regular fa-clock"></i> ETA</span>
+                        <span class="telemetry-value" id="dlEtaVal">--</span>
+                    </div>
+                    <div class="telemetry-card">
+                        <span class="telemetry-label"><i class="fa-solid fa-microchip"></i> Engine</span>
+                        <span class="telemetry-value" id="dlPhaseVal">Connecting...</span>
                     </div>
                 </div>
 
                 <!-- Complete Action Button -->
                 <div id="dlCompleteBox" class="dl-complete-action hidden">
+                    <div class="complete-celebrate-banner">
+                        <i class="fa-solid fa-circle-check"></i>
+                        <span>High-speed download completed and ready!</span>
+                    </div>
                     <a id="dlSaveFileBtn" class="btn-save-file-big" href="#" download>
                         <i class="fa-solid fa-circle-down"></i> Save File to Computer
                     </a>

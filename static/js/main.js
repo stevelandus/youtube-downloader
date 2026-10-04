@@ -25,6 +25,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const dlProgressBar = document.getElementById('dlProgressBar');
     const dlSpeedText = document.getElementById('dlSpeedText');
     const dlPercentText = document.getElementById('dlPercentText');
+    const dlBigPercent = document.getElementById('dlBigPercent');
+    const dlSpeedVal = document.getElementById('dlSpeedVal');
+    const dlSizeVal = document.getElementById('dlSizeVal');
+    const dlEtaVal = document.getElementById('dlEtaVal');
+    const dlPhaseVal = document.getElementById('dlPhaseVal');
+    const dlStatusIcon = document.getElementById('dlStatusIcon');
     const dlCompleteBox = document.getElementById('dlCompleteBox');
     const dlSaveFileBtn = document.getElementById('dlSaveFileBtn');
 
@@ -498,8 +504,36 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Animated Download UI & Real-Time Status Tracking
+    let displayedProgress = 0.0;
+    let animFrameId = null;
+
+    function animatePercentTo(targetVal) {
+        if (animFrameId) cancelAnimationFrame(animFrameId);
+
+        function step() {
+            const diff = targetVal - displayedProgress;
+            if (Math.abs(diff) < 0.1) {
+                displayedProgress = targetVal;
+                renderPercentText(displayedProgress);
+            } else {
+                displayedProgress += diff * 0.18;
+                renderPercentText(displayedProgress);
+                animFrameId = requestAnimationFrame(step);
+            }
+        }
+        animFrameId = requestAnimationFrame(step);
+    }
+
+    function renderPercentText(val) {
+        const formatted = val.toFixed(1) + '%';
+        if (dlProgressBar) dlProgressBar.style.width = `${Math.min(100, Math.max(0, val))}%`;
+        if (dlPercentText) dlPercentText.textContent = formatted;
+        if (dlBigPercent) dlBigPercent.textContent = formatted;
+    }
+
     function trackDownloadJob(jobId, initialTitle) {
         currentActiveJobId = jobId;
+        displayedProgress = 0.0;
 
         if (activePollInterval) {
             clearInterval(activePollInterval);
@@ -509,17 +543,25 @@ document.addEventListener('DOMContentLoaded', () => {
         downloadProgressSection.classList.remove('hidden');
         downloadProgressSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-        dlStatusBadge.textContent = 'QUEUED...';
+        dlStatusBadge.textContent = 'CONNECTING...';
         dlStatusBadge.style.borderColor = 'rgba(245, 158, 11, 0.4)';
         dlStatusBadge.style.color = '#F59E0B';
 
+        if (dlStatusIcon) {
+            dlStatusIcon.className = 'fa-solid fa-cloud-arrow-down download-animated-icon';
+            dlStatusIcon.style.color = 'var(--primary-red)';
+        }
+
         dlActiveTitle.textContent = initialTitle;
-        dlProgressBar.style.width = '0%';
-        dlPercentText.textContent = '0%';
-        dlSpeedText.innerHTML = '<i class="fa-solid fa-gauge-high"></i> Initializing download stream...';
+        renderPercentText(0.0);
+        dlSpeedText.innerHTML = '<i class="fa-solid fa-bolt"></i> Initializing 16-thread turbo downloader...';
+        if (dlSpeedVal) dlSpeedVal.textContent = 'Accelerating...';
+        if (dlSizeVal) dlSizeVal.textContent = 'Calculating...';
+        if (dlEtaVal) dlEtaVal.textContent = 'Estimating...';
+        if (dlPhaseVal) dlPhaseVal.textContent = 'Turbo CDN Stream';
         dlCompleteBox.classList.add('hidden');
 
-        // Poll status every 800ms
+        // Poll status every 450ms for ultra-smooth real-time updates
         activePollInterval = setInterval(async () => {
             try {
                 const res = await fetch(`/api/job/status/${jobId}`);
@@ -532,6 +574,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     activePollInterval = null;
 
                     if (statusData.status === 'finished') {
+                        animatePercentTo(100.0);
+
+                        if (dlStatusIcon) {
+                            dlStatusIcon.className = 'fa-solid fa-circle-check download-animated-icon';
+                            dlStatusIcon.style.color = '#10B981';
+                        }
+
                         // Reveal Big Save File Button & Auto Download
                         dlCompleteBox.classList.remove('hidden');
                         dlSaveFileBtn.href = `/api/download/file/${jobId}`;
@@ -545,38 +594,41 @@ document.addEventListener('DOMContentLoaded', () => {
                         link.click();
                         document.body.removeChild(link);
                     } else if (statusData.status === 'error') {
-                        showError(statusData.error_msg || 'Download failed on cloud server.');
+                        showError(statusData.error_msg || 'Download failed on server.');
                     }
                 }
             } catch (e) {
                 console.error('Job status check error:', e);
             }
-        }, 800);
-
+        }, 450);
     }
 
     function updateDownloadProgressUI(data) {
         if (data.title) dlActiveTitle.textContent = data.title;
 
-        const progress = data.progress || 0;
-        dlProgressBar.style.width = `${progress}%`;
-        dlPercentText.textContent = `${progress}%`;
+        const targetProgress = typeof data.progress === 'number' ? data.progress : 0;
+        animatePercentTo(targetProgress);
+
+        if (dlSpeedVal && data.speed) dlSpeedVal.textContent = data.speed;
+        if (dlSizeVal && data.size_info) dlSizeVal.textContent = data.size_info;
+        if (dlEtaVal && data.eta) dlEtaVal.textContent = data.eta;
+        if (dlPhaseVal && data.phase) dlPhaseVal.textContent = data.phase;
 
         if (data.status === 'downloading') {
             dlStatusBadge.textContent = 'DOWNLOADING...';
             dlStatusBadge.style.color = '#FF0055';
             dlStatusBadge.style.borderColor = 'rgba(255, 0, 85, 0.4)';
-            dlSpeedText.innerHTML = `<i class="fa-solid fa-gauge-high"></i> Speed: ${data.speed || 'Calculating...'} | ETA: ${data.eta || 'Estimating...'}`;
+            dlSpeedText.innerHTML = `<i class="fa-solid fa-gauge-high"></i> Speed: <strong>${data.speed || 'Calculating...'}</strong> &nbsp;|&nbsp; ETA: <strong>${data.eta || 'Estimating...'}</strong>`;
         } else if (data.status === 'converting') {
-            dlStatusBadge.textContent = 'PROCESSING FFMPEG...';
+            dlStatusBadge.textContent = 'REMUXING...';
             dlStatusBadge.style.color = '#7928CA';
             dlStatusBadge.style.borderColor = 'rgba(121, 40, 202, 0.4)';
-            dlSpeedText.innerHTML = `<i class="fa-solid fa-compact-disc fa-spin"></i> Merging video & audio streams with FFmpeg...`;
+            dlSpeedText.innerHTML = `<i class="fa-solid fa-bolt fa-spin"></i> Hardware Instant Remux (Zero Transcode Copy)...`;
         } else if (data.status === 'finished') {
             dlStatusBadge.textContent = 'COMPLETED!';
             dlStatusBadge.style.color = '#10B981';
             dlStatusBadge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
-            dlSpeedText.innerHTML = `<i class="fa-solid fa-circle-check" style="color: #10B981;"></i> Download ready: ${data.filename || ''}`;
+            dlSpeedText.innerHTML = `<i class="fa-solid fa-circle-check" style="color: #10B981;"></i> Media ready: ${data.filename || ''}`;
         } else if (data.status === 'error') {
             dlStatusBadge.textContent = 'FAILED';
             dlStatusBadge.style.color = '#EF4444';
