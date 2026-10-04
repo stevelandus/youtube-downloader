@@ -26,8 +26,86 @@ DOWNLOADS_DIR = BASE_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 COOKIE_FILE_PATH = BASE_DIR / "cookies.txt"
 
-# In-memory storage for active/completed download jobs
-jobs = {}
+# File-backed shared storage for active/completed download jobs (multi-worker & thread-safe)
+JOBS_CACHE_FILE = DOWNLOADS_DIR / "jobs_state.json"
+
+class JobDict(dict):
+    """Inner dictionary that triggers parent save on mutation"""
+    def __init__(self, parent_dict, job_id, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._parent = parent_dict
+        self._job_id = job_id
+
+    def update(self, *args, **kwargs):
+        super().update(*args, **kwargs)
+        if hasattr(self, '_parent') and self._parent:
+            self._parent._save()
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        if hasattr(self, '_parent') and self._parent:
+            self._parent._save()
+
+class SharedJobsDict(dict):
+    """Thread-safe and process-safe dictionary backed by JSON file"""
+    def __init__(self, storage_path):
+        super().__init__()
+        self.storage_path = Path(storage_path)
+        self.lock = threading.Lock()
+        self._load()
+
+    def _load(self):
+        if self.storage_path.exists():
+            try:
+                with open(self.storage_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        for k, v in data.items():
+                            super().__setitem__(k, JobDict(self, k, v))
+            except Exception:
+                pass
+
+    def _save(self):
+        with self.lock:
+            try:
+                data = {k: dict(v) for k, v in self.items()}
+                if len(data) > 50:
+                    keys = list(data.keys())[-50:]
+                    data = {k: data[k] for k in keys}
+                with open(self.storage_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f)
+            except Exception:
+                pass
+
+    def __getitem__(self, key):
+        if not super().__contains__(key):
+            self._load()
+        val = super().get(key)
+        if val is None:
+            # Return empty JobDict rather than KeyError
+            wrapped = JobDict(self, key, {})
+            super().__setitem__(key, wrapped)
+            return wrapped
+        return val
+
+    def get(self, key, default=None):
+        if not super().__contains__(key):
+            self._load()
+        return super().get(key, default)
+
+    def __contains__(self, key):
+        if not super().__contains__(key):
+            self._load()
+        return super().__contains__(key)
+
+    def __setitem__(self, key, val):
+        with self.lock:
+            wrapped = JobDict(self, key, val) if isinstance(val, dict) else val
+            super().__setitem__(key, wrapped)
+            self._save()
+
+jobs = SharedJobsDict(JOBS_CACHE_FILE)
+
 
 def init_cookies():
     """
@@ -166,9 +244,9 @@ def get_base_ydl_opts(client_list=None):
         'no_warnings': True,
         'nocheckcertificate': True,
         'geo_bypass': True,
-        'retries': 3,
-        'fragment_retries': 3,
-        'socket_timeout': 20,
+        'retries': 2,
+        'fragment_retries': 2,
+        'socket_timeout': 12,
         'live_from_start': True,
         'remote_components': ['ejs:github'],
         'js_runtimes': {'node': {}},
@@ -259,8 +337,8 @@ def fetch_media_info(url):
 
     client_attempts = [
         None,  # Default smart client selection
-        ['android', 'ios'],
-        ['web']
+        ['android', 'web'],
+        ['android']
     ]
 
     last_error = None
@@ -287,9 +365,9 @@ def fetch_media_info(url):
         if fallback_data:
             return fallback_data
 
-        if 'Sign in to confirm you' in str(last_error):
+        if any(w in str(last_error) for w in ['Sign in to confirm', 'The page needs to be reloaded', 'bot', 'HTTP Error 429']):
             raise RuntimeError(
-                "YouTube Bot Check: Cloud IP is blocked by YouTube. "
+                "YouTube Cloud IP Block: Cloud IP is blocked by YouTube. "
                 "Please configure YOUTUBE_COOKIES in Render Environment Variables or run locally."
             )
         raise RuntimeError(f"Failed to fetch video/playlist info: {last_error or 'Unknown error'}")
@@ -435,78 +513,98 @@ def start_download_thread(url, download_type, options, job_id):
 
     try:
         out_template = str(DOWNLOADS_DIR / f"{job_id}_%(title)s.%(ext)s")
-        
-        ydl_opts = get_base_ydl_opts()
-        ydl_opts.update({
-            'outtmpl': out_template,
-            'progress_hooks': [lambda d: progress_hook(d, job_id)],
-        })
 
         # Check trimming parameters
         start_sec = parse_time_to_seconds(options.get('start_time'))
         end_sec = parse_time_to_seconds(options.get('end_time'))
         is_trimmed = (start_sec is not None and start_sec > 0) or (end_sec is not None and end_sec > 0)
 
-        if is_trimmed:
-            ydl_opts['download_ranges'] = download_range_func(None, [(start_sec or 0, end_sec or float('inf'))])
-            ydl_opts['force_keyframes_at_cuts'] = True
+        client_candidates = [None, ['android', 'web'], ['android']]
+        download_success = False
+        last_dl_error = None
+        info = None
 
-        if download_type == 'audio':
-            audio_format = options.get('audio_format', 'mp3')
-            bitrate = options.get('bitrate', '320')
+        for client_choice in client_candidates:
+            ydl_opts = get_base_ydl_opts(client_choice)
             ydl_opts.update({
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': audio_format,
-                    'preferredquality': bitrate if bitrate != '0' else None,
-                }],
-            })
-        else:
-            resolution = options.get('resolution', 'best')
-            if resolution == 'best' or not resolution:
-                format_spec = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
-            else:
-                target_height = resolution.replace('p', '')
-                format_spec = f'bestvideo[height<={target_height}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={target_height}]+bestaudio/best[height<={target_height}]/best'
-            
-            ydl_opts.update({
-                'format': format_spec,
-                'merge_output_format': 'mp4',
+                'outtmpl': out_template,
+                'progress_hooks': [lambda d: progress_hook(d, job_id)],
             })
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            title = info.get('title', 'Downloaded Media')
-            
-            matched_files = list(DOWNLOADS_DIR.glob(f"{job_id}_*"))
-            if not matched_files:
-                raise RuntimeError("File download completed but output file could not be located.")
-            
-            final_file = matched_files[0]
-            
-            # Post-cut verification with FFmpeg if trimming requested
             if is_trimmed:
-                try:
-                    trim_media_file(final_file, start_sec, end_sec)
-                except Exception as trim_err:
-                    print(f"Warning: post-trim failed, using raw download: {trim_err}")
+                ydl_opts['download_ranges'] = download_range_func(None, [(start_sec or 0, end_sec or float('inf'))])
+                ydl_opts['force_keyframes_at_cuts'] = True
 
-            clip_tag = "_clip" if is_trimmed else ""
-            clean_filename = f"{sanitize_filename(title)}{clip_tag}{final_file.suffix}"
-            
-            jobs[job_id].update({
-                'status': 'finished',
-                'progress': 100.0,
-                'filename': clean_filename,
-                'file_path': str(final_file),
-                'title': f"{title} (Trimmed Clip)" if is_trimmed else title
-            })
+            if download_type == 'audio':
+                audio_format = options.get('audio_format', 'mp3')
+                bitrate = options.get('bitrate', '320')
+                ydl_opts.update({
+                    'format': 'bestaudio/best',
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': audio_format,
+                        'preferredquality': bitrate if bitrate != '0' else None,
+                    }],
+                })
+            else:
+                resolution = options.get('resolution', 'best')
+                if resolution == 'best' or not resolution:
+                    format_spec = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+                else:
+                    target_height = resolution.replace('p', '')
+                    format_spec = f'bestvideo[height<={target_height}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={target_height}]+bestaudio/best[height<={target_height}]/best'
+                
+                ydl_opts.update({
+                    'format': format_spec,
+                    'merge_output_format': 'mp4',
+                })
+
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    download_success = True
+                    break
+            except Exception as dl_err:
+                last_dl_error = str(dl_err)
+                print(f"[TubeGrab] Client {client_choice} download attempt failed: {last_dl_error}")
+                if any(err_kw in last_dl_error for err_kw in ['The page needs to be reloaded', 'Sign in to confirm', 'bot', 'HTTP Error 429']):
+                    continue
+                else:
+                    break
+
+        if not download_success:
+            raise RuntimeError(last_dl_error or "Download failed")
+
+        title = info.get('title', 'Downloaded Media') if info else 'Downloaded Media'
+        
+        matched_files = list(DOWNLOADS_DIR.glob(f"{job_id}_*"))
+        if not matched_files:
+            raise RuntimeError("File download completed but output file could not be located.")
+        
+        final_file = matched_files[0]
+        
+        # Post-cut verification with FFmpeg if trimming requested
+        if is_trimmed:
+            try:
+                trim_media_file(final_file, start_sec, end_sec)
+            except Exception as trim_err:
+                print(f"Warning: post-trim failed, using raw download: {trim_err}")
+
+        clip_tag = "_clip" if is_trimmed else ""
+        clean_filename = f"{sanitize_filename(title)}{clip_tag}{final_file.suffix}"
+        
+        jobs[job_id].update({
+            'status': 'finished',
+            'progress': 100.0,
+            'filename': clean_filename,
+            'file_path': str(final_file),
+            'title': f"{title} (Trimmed Clip)" if is_trimmed else title
+        })
 
     except Exception as e:
         err_str = str(e)
         print(f"Error in download thread for job {job_id}: {err_str}")
-        if 'Sign in to confirm you' in err_str:
+        if any(w in err_str for w in ['Sign in to confirm', 'The page needs to be reloaded', 'bot', 'HTTP Error 429']):
             err_str = (
                 "YouTube Cloud IP Block: Render server IP is blocked by YouTube BotGuard. "
                 "Please add YOUTUBE_COOKIES in Render Environment Variables or run TubeGrab locally."
@@ -515,6 +613,7 @@ def start_download_thread(url, download_type, options, job_id):
             'status': 'error',
             'error_msg': err_str
         })
+
 
 def download_playlist_zip_thread(urls, download_type, options, job_id):
     """

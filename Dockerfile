@@ -20,5 +20,7 @@ COPY . .
 # Expose port
 EXPOSE 5000
 
-# Command to run production WSGI server
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "300", "app:app"]
+# Command to run production WSGI server (supports dynamic PORT on Render/Railway/Fly)
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 1 --threads 8 --timeout 300 app:app"]
+
+
