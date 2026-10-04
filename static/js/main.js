@@ -544,12 +544,15 @@ document.addEventListener('DOMContentLoaded', () => {
                         document.body.appendChild(link);
                         link.click();
                         document.body.removeChild(link);
+                    } else if (statusData.status === 'error') {
+                        showError(statusData.error_msg || 'Download failed on cloud server.');
                     }
                 }
             } catch (e) {
                 console.error('Job status check error:', e);
             }
         }, 800);
+
     }
 
     function updateDownloadProgressUI(data) {
